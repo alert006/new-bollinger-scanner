@@ -3,11 +3,11 @@ import pandas as pd
 import numpy as np
 import time
 import sys
+import os # Import the os module for GitHub Actions output
 from yfinance.shared import TickerNoDataError # Import the specific error
 
 # --- Configuration ---
 # List of NIFTY 50 tickers with the .NS suffix for Yahoo Finance (Indian Exchange)
-# NOTE: HDFC.NS has been removed as it is delisted/merged with HDFCBANK.NS and no longer returns data.
 TICKERS = [
     "RELIANCE.NS", "HDFCBANK.NS", "ICICIBANK.NS", "INFY.NS",
     "TCS.NS", "KOTAKBANK.NS", "HINDUNILVR.NS", "ITC.NS", "BHARTIARTL.NS",
@@ -35,7 +35,7 @@ def fetch_data(ticker):
         if data.empty or 'Close' not in data.columns or len(data) < WINDOW:
             print(f"Warning: Not enough data or missing 'Close' column for {ticker}. Skipping.")
             return None
-        
+            
         return data
     except TickerNoDataError:
         # Catch the specific yfinance error when a ticker returns no data (like delisted ones)
@@ -69,6 +69,7 @@ def calculate_pct_b(close_prices, window, num_std):
     numerator = close_prices - lower_band
     
     # Calculate %B, handling division by zero/NaNs (occurs at start of series)
+    # The current logic correctly avoids broadcasting issues.
     pct_b_series = np.where(denominator != 0, numerator / denominator, 0.5)
     
     # Return ONLY the latest calculated value as a float
@@ -88,6 +89,19 @@ def scan_for_signals(pct_b, ticker):
         return f"{ticker}: Short/Sell Signal (%B = {pct_b:.2f}) - Overbought (Above Upper Band)"
     else:
         return None
+
+# NEW FUNCTION: Handles writing the output variable to the GitHub Actions environment file
+def set_github_output(name, value):
+    """Sets a GitHub Actions output variable using the recommended $GITHUB_OUTPUT file."""
+    if 'GITHUB_OUTPUT' in os.environ:
+        with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+            # We must escape newlines for multi-line output, which is crucial for Telegram messages
+            escaped_value = value.replace('\n', '%0A')
+            f.write(f"{name}={escaped_value}\n")
+    else:
+        # Fallback print for local testing or older runners (though this is deprecated)
+        print(f"::set-output name={name}::{value}")
+
 
 def main():
     """Main function to run the scanner across all tickers."""
@@ -121,13 +135,12 @@ def main():
     if signal_list:
         output = "🚨 Daily Trading Signals Found! 🚨\n\n" + "\n".join(signal_list)
         print(output) # Print the signals for visibility
-        # Set the output variable for the next step (Telegram)
-        print(f"::set-output name=signal::{output}")
     else:
-        # Ensure the output is set even when no signals are found
-        no_signal_msg = "No Bollinger Band Signals Found (All tickers in range 5% - 95%)."
-        print(no_signal_msg)
-        print(f"::set-output name=signal::{no_signal_msg}")
+        output = "✅ No Bollinger Band Signals Found (All tickers in range 5% - 95%)."
+        print(output)
+        
+    # Set the output variable using the new, correct method
+    set_github_output('signal', output)
         
     print("--- Scan Complete ---")
 
