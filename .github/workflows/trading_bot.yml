@@ -1,0 +1,41 @@
+name: Daily Bollinger Signal Bot
+
+on:
+  # Schedule the job to run every day at 15:30 UTC (9 PM IST)
+  # NOTE: UTC time is used for scheduling. 15:30 UTC = 9:00 PM IST
+  schedule:
+    - cron: '30 15 * * *'
+  
+  # Allows you to manually run the workflow from the Actions tab
+  workflow_dispatch:
+
+jobs:
+  run-scanner:
+    runs-on: ubuntu-latest
+
+    # Load the secure secrets (Telegram Token & Chat ID)
+    env:
+      TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+    steps:
+      # Step 1: Checkout the repository code
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Step 2: Set up Python environment
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11' 
+
+      # Step 3: Install Python dependencies
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # Step 4: Run the main Python script (Bot Execution)
+      # The script will now run in a non-Streamlit environment, so it will execute the bot logic.
+      - name: Run Trading Bot and Send Alerts
+        run: python app.py
