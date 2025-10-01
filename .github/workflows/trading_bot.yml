@@ -1,11 +1,12 @@
 name: Daily Bollinger Signal Bot
 
 # Triggers the workflow at 9:15 AM EST (which is approximately 3:45 AM UTC) every weekday (Monday-Friday)
-schedule:
-  - cron: '15 3 * * 1-5'
+on:
+  schedule:
+    - cron: '15 3 * * 1-5'
 
 # Allows manual running from the Actions tab
-workflow_dispatch:
+  workflow_dispatch:
 
 jobs:
   run-scanner:
@@ -25,24 +26,26 @@ jobs:
           # CRITICAL FIX: Use --no-cache-dir to prevent re-using old, broken yfinance versions
           pip install -r requirements.txt --no-cache-dir
 
-      - name: Run Trading Bot and Send Alerts
+      - name: Run Trading Bot and Set Output Variable
         id: scanner
         run: |
-          # 1. Execute the correct script (app.py) and capture its output into a variable.
-          SIGNAL=$(python app.py)
+          # Execute the Python script. The script's set_github_output function
+          # internally writes the clean 'signal' message to the $GITHUB_OUTPUT file.
+          python app.py
           
-          # 2. This critical line saves the variable value to be accessible in the next step.
-          echo "SIGNAL_OUTPUT=$SIGNAL" >> $GITHUB_OUTPUT
+          # No manual echo capture needed here, as app.py does the heavy lifting.
 
-      - name: Send Telegram Notification (ONLY if trade signal is not empty)
-        if: ${{ steps.scanner.outputs.SIGNAL_OUTPUT != '' }}
+      - name: Send Telegram Notification (Only if signals were found)
+        # CRITICAL FIX: The conditional must check for the "No Signals Found" message,
+        # which is the exact content of the 'signal' variable when no trades are available.
+        if: ${{ steps.scanner.outputs.signal != '✅ No Bollinger Band Signals Found (All tickers in range 5% - 95%).' }}
         uses: appleboy/telegram-action@master
         with:
           to: ${{ secrets.TELEGRAM_CHAT_ID }}
           token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           message: |
             *TRADING BOT ALERT Signal Found*
-            Signal Details: ${{ steps.scanner.outputs.SIGNAL_OUTPUT }}
+            Signal Details: ${{ steps.scanner.outputs.signal }}
           disable_web_page_preview: true
 
       - name: Complete Job
