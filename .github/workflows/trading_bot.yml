@@ -28,10 +28,11 @@ jobs:
       - name: Run Trading Bot and Send Alerts
         id: scanner
         run: |
-          # Line 2: ***CRITICAL CHANGE***
-          # We are changing this from 'python app.py' to 'python streamlit_trading_bot.py'
-          # to run the signal script instead of the Streamlit web app.
-          python streamlit_trading_bot.py
+          # 1. Execute the correct script (trading_bot.py) and capture its output into a variable.
+          SIGNAL=$(python trading_bot.py)
+          
+          # 2. This critical line saves the variable so the Telegram step can read it later.
+          echo "signal=$SIGNAL" >> $GITHUB_OUTPUT
           
       - name: Send Telegram Notification (ONLY if trade_signal is not empty)
         if: ${{ steps.scanner.outputs.signal != '' }}
