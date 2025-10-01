@@ -3,11 +3,13 @@ import pandas as pd
 import numpy as np
 import time
 import sys
+from yfinance.shared import TickerNoDataError # Import the specific error
 
 # --- Configuration ---
 # List of NIFTY 50 tickers with the .NS suffix for Yahoo Finance (Indian Exchange)
+# NOTE: HDFC.NS has been removed as it is delisted/merged with HDFCBANK.NS and no longer returns data.
 TICKERS = [
-    "RELIANCE.NS", "HDFCBANK.NS", "ICICIBANK.NS", "INFY.NS", "HDFC.NS",
+    "RELIANCE.NS", "HDFCBANK.NS", "ICICIBANK.NS", "INFY.NS",
     "TCS.NS", "KOTAKBANK.NS", "HINDUNILVR.NS", "ITC.NS", "BHARTIARTL.NS",
     "SBIN.NS", "LT.NS", "BAJFINANCE.NS", "AXISBANK.NS", "ASIANPAINT.NS",
     "MARUTI.NS", "WIPRO.NS", "HCLTECH.NS", "ULTRACEMCO.NS", "SUNPHARMA.NS",
@@ -26,18 +28,21 @@ NUM_STD = 2  # Number of standard deviations for bands
 def fetch_data(ticker):
     """Fetches historical data for a given ticker."""
     try:
-        # Fetch up to 1 year of daily data. auto_adjust=True simplifies the structure.
-        # Set timeout to prevent indefinitely hung calls on bad tickers.
+        # Fetch up to 1 year of daily data.
         data = yf.download(ticker, period="1y", interval="1d", progress=False, auto_adjust=True, timeout=10)
         
         # Check if data frame contains a 'Close' column and has enough rows
         if data.empty or 'Close' not in data.columns or len(data) < WINDOW:
-            print(f"Warning: Not enough data or missing 'Close' column for {ticker}.")
+            print(f"Warning: Not enough data or missing 'Close' column for {ticker}. Skipping.")
             return None
         
         return data
+    except TickerNoDataError:
+        # Catch the specific yfinance error when a ticker returns no data (like delisted ones)
+        print(f"Error: Ticker {ticker} returned no data. It may be delisted or invalid.")
+        return None
     except Exception as e:
-        # Catch network or request errors
+        # Catch other network or request errors
         print(f"Error fetching data for {ticker}: {e}")
         return None
 
@@ -55,7 +60,7 @@ def calculate_pct_b(close_prices, window, num_std):
     # 2. Calculate Standard Deviation
     std_dev = close_prices.rolling(window=window).std()
 
-    # 3. Calculate Upper and Lower Bands (these are also series)
+    # 3. Calculate Upper and Lower Bands
     upper_band = middle_band + (std_dev * num_std)
     lower_band = middle_band - (std_dev * num_std)
 
@@ -108,7 +113,7 @@ def main():
             if signal:
                 signal_list.append(signal)
         except Exception as e:
-            # This try/except block should now only catch errors related to the single-series calculation
+            # Catch any unexpected errors during the calculation phase
             print(f"Error processing final calculation for {ticker}: {e}. Skipping.")
             continue
 
