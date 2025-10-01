@@ -69,7 +69,6 @@ def calculate_pct_b(close_prices, window, num_std):
     numerator = close_prices - lower_band
     
     # Calculate %B, handling division by zero/NaNs (occurs at start of series)
-    # The current logic correctly avoids broadcasting issues.
     pct_b_series = np.where(denominator != 0, numerator / denominator, 0.5)
     
     # Return ONLY the latest calculated value as a float
@@ -93,13 +92,15 @@ def scan_for_signals(pct_b, ticker):
 # NEW FUNCTION: Handles writing the output variable to the GitHub Actions environment file
 def set_github_output(name, value):
     """Sets a GitHub Actions output variable using the recommended $GITHUB_OUTPUT file."""
+    # Check if we are running in a GitHub Actions environment
     if 'GITHUB_OUTPUT' in os.environ:
         with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
             # We must escape newlines for multi-line output, which is crucial for Telegram messages
+            # Note: GitHub Actions handles this, but we'll include it for robustness.
             escaped_value = value.replace('\n', '%0A')
             f.write(f"{name}={escaped_value}\n")
     else:
-        # Fallback print for local testing or older runners (though this is deprecated)
+        # Fallback print for local testing or older runners
         print(f"::set-output name={name}::{value}")
 
 
@@ -131,7 +132,7 @@ def main():
             print(f"Error processing final calculation for {ticker}: {e}. Skipping.")
             continue
 
-    # --- GitHub Actions Output ---
+    # --- GitHub Actions Output Preparation ---
     if signal_list:
         output = "🚨 Daily Trading Signals Found! 🚨\n\n" + "\n".join(signal_list)
         print(output) # Print the signals for visibility
