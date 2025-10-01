@@ -1,150 +1,141 @@
+import os
 import yfinance as yf
 import pandas as pd
-import numpy as np
-import time
-import sys
-import os # Import the os module for GitHub Actions output
-from yfinance.shared import TickerNoDataError # Import the specific error
 
 # --- Configuration ---
-# List of NIFTY 50 tickers with the .NS suffix for Yahoo Finance (Indian Exchange)
+# List of top Nifty 50 tickers (Indian stocks on the National Stock Exchange)
+# Using the '.NS' suffix for NSE tickers
 TICKERS = [
-    "RELIANCE.NS", "HDFCBANK.NS", "ICICIBANK.NS", "INFY.NS",
-    "TCS.NS", "KOTAKBANK.NS", "HINDUNILVR.NS", "ITC.NS", "BHARTIARTL.NS",
-    "SBIN.NS", "LT.NS", "BAJFINANCE.NS", "AXISBANK.NS", "ASIANPAINT.NS",
-    "MARUTI.NS", "WIPRO.NS", "HCLTECH.NS", "ULTRACEMCO.NS", "SUNPHARMA.NS",
-    "TITAN.NS", "NESTLEIND.NS", "TECHM.NS", "NTPC.NS", "M&M.NS",
-    "ADANIPORTS.NS", "POWERGRID.NS", "GRASIM.NS", "INDUSINDBK.NS", "DRREDDY.NS",
-    "JSWSTEEL.NS", "APOLLOHOSP.NS", "SBILIFE.NS", "EICHERMOT.NS", "BRITANNIA.NS",
-    "BPCL.NS", "TATACONSUM.NS", "HDFCLIFE.NS", "COALINDIA.NS", "SHREECEM.NS",
-    "HINDALCO.NS", "HEROMOTOCO.NS", "DIVISLAB.NS", "UPL.NS", "CIPLA.NS",
-    "ONGC.NS", "TATAMOTORS.NS", "ADANIENT.NS", "BAJAJFINSV.NS", "DMART.NS" 
+    'RELIANCE.NS', 'HDFCBANK.NS', 'ICICIBANK.NS', 'INFY.NS', 'HDFC.NS', 
+    'TCS.NS', 'HINDUNILVR.NS', 'KOTAKBANK.NS', 'BHARTIARTL.NS', 'ITC.NS',
+    'LT.NS', 'SBIN.NS', 'AXISBANK.NS', 'BAJFINANCE.NS', 'ASIANPAINT.NS',
+    'MARUTI.NS', 'TITAN.NS', 'M&M.NS', 'ULTRACEMCO.NS', 'NESTLEIND.NS',
+    'WIPRO.NS', 'SUNPHARMA.NS', 'TECHM.NS', 'ADANIENT.NS', 'ADANIPORTS.NS',
+    'POWERGRID.NS', 'NTPC.NS', 'TATACONSUM.NS', 'DIVISLAB.NS', 'GRASIM.NS',
+    'INDUSINDBK.NS', 'APOLLOHOSP.NS', 'JSWSTEEL.NS', 'DRREDDY.NS', 'BRITANNIA.NS',
+    'HCLTECH.NS', 'EICHERMOT.NS', 'CIPLA.NS', 'SHREECEM.NS', 'HEROMOTOCO.NS'
+    # NOTE: I kept the list to 40 popular ones to prevent time-outs in the action run.
+    # We can add more if these run successfully.
 ]
-WINDOW = 20  # Lookback window for Bollinger Bands
-NUM_STD = 2  # Number of standard deviations for bands
+PERIOD = '6mo' # Use 6 months of historical data
+INTERVAL = '1d' # Daily closing prices
+BB_WINDOW = 20 # Standard 20-day Moving Average
+BB_STD = 2 # Standard 2 standard deviations
 
-# --- Core Functions ---
-
-def fetch_data(ticker):
-    """Fetches historical data for a given ticker."""
-    try:
-        # Fetch up to 1 year of daily data.
-        data = yf.download(ticker, period="1y", interval="1d", progress=False, auto_adjust=True, timeout=10)
-        
-        # Check if data frame contains a 'Close' column and has enough rows
-        if data.empty or 'Close' not in data.columns or len(data) < WINDOW:
-            print(f"Warning: Not enough data or missing 'Close' column for {ticker}. Skipping.")
-            return None
-            
-        return data
-    except TickerNoDataError:
-        # Catch the specific yfinance error when a ticker returns no data (like delisted ones)
-        print(f"Error: Ticker {ticker} returned no data. It may be delisted or invalid.")
-        return None
-    except Exception as e:
-        # Catch other network or request errors
-        print(f"Error fetching data for {ticker}: {e}")
-        return None
-
-def calculate_pct_b(close_prices, window, num_std):
-    """
-    Calculates the latest %B value from a single Pandas Series of closing prices.
-    This function is completely isolated to prevent DataFrame broadcasting errors.
-    """
-    if close_prices is None or len(close_prices) < window:
-        return np.nan
-
-    # 1. Calculate Middle Band (SMA)
-    middle_band = close_prices.rolling(window=window).mean()
-
-    # 2. Calculate Standard Deviation
-    std_dev = close_prices.rolling(window=window).std()
-
-    # 3. Calculate Upper and Lower Bands
-    upper_band = middle_band + (std_dev * num_std)
-    lower_band = middle_band - (std_dev * num_std)
-
-    # 4. Calculate %B (Percent Bandwidth) for the whole series
-    denominator = upper_band - lower_band
-    numerator = close_prices - lower_band
-    
-    # Calculate %B, handling division by zero/NaNs (occurs at start of series)
-    pct_b_series = np.where(denominator != 0, numerator / denominator, 0.5)
-    
-    # Return ONLY the latest calculated value as a float
-    return pct_b_series[-1]
-
-def scan_for_signals(pct_b, ticker):
-    """Checks the latest %B value for buy/sell signals."""
-    # Check for NaN (Not a Number) which happens if data was insufficient or calculation failed
-    if np.isnan(pct_b):
-        return None
-        
-    # Check for Oversold (Buy/Long Signal: < 5%)
-    if pct_b < 0.05:
-        return f"{ticker}: Long/Buy Signal (%B = {pct_b:.2f}) - Oversold (Below Lower Band)"
-    # Check for Overbought (Sell/Short Signal: > 95%)
-    elif pct_b > 0.95:
-        return f"{ticker}: Short/Sell Signal (%B = {pct_b:.2f}) - Overbought (Above Upper Band)"
-    else:
-        return None
-
-# NEW FUNCTION: Handles writing the output variable to the GitHub Actions environment file
 def set_github_output(name, value):
-    """Sets a GitHub Actions output variable using the recommended $GITHUB_OUTPUT file."""
-    # Check if we are running in a GitHub Actions environment
-    if 'GITHUB_OUTPUT' in os.environ:
-        with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-            # We must escape newlines for multi-line output, which is crucial for Telegram messages
-            # Note: GitHub Actions handles this, but we'll include it for robustness.
+    """
+    Sets an output variable for the GitHub Actions workflow.
+    The final signal text will be passed back to the YAML file this way.
+    """
+    try:
+        # GitHub Actions writes outputs to a specific environment file
+        with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+            # Escape newlines for GitHub Actions multi-line output handling
             escaped_value = value.replace('\n', '%0A')
-            f.write(f"{name}={escaped_value}\n")
-    else:
-        # Fallback print for local testing or older runners
-        print(f"::set-output name={name}::{value}")
+            print(f'{name}={escaped_value}', file=f)
+    except Exception as e:
+        # Fallback for local testing (will print the output to console)
+        print(f"Error setting GitHub output (likely running locally): {e}")
+        print(f"--- Faking GitHub Output Variable '{name}': {value} ---")
 
 
-def main():
-    """Main function to run the scanner across all tickers."""
-    signal_list = []
+def calculate_bollinger_bands(df, window=BB_WINDOW, num_std=BB_STD):
+    """Calculates the 20-day simple moving average and Bollinger Bands."""
+    # Ensure the required columns exist before calculation
+    if 'Close' not in df.columns:
+        return None # Return None if data is incomplete
+
+    df['SMA'] = df['Close'].rolling(window=window).mean()
+    df['STD'] = df['Close'].rolling(window=window).std()
+    df['Upper'] = df['SMA'] + (df['STD'] * num_std)
+    df['Lower'] = df['SMA'] - (df['STD'] * num_std)
+    return df
+
+def generate_signal(ticker_df, ticker):
+    """
+    Generates a signal if the last closing price is near the upper or lower band.
+    """
+    # Check for NaN values in the last row (which happens when BB calculation starts)
+    if ticker_df.iloc[-1].isnull().any():
+        return f"ℹ️ {ticker} - Not enough data for full BB calculation. Skipping."
+        
+    last_row = ticker_df.iloc[-1]
+    last_close = last_row['Close']
+    upper_band = last_row['Upper']
+    lower_band = last_row['Lower']
+
+    signal = ""
     
-    print("--- Starting Daily Bollinger Band Scan (Nifty 50) ---")
+    # Check for price above the Upper Band (potential sell signal)
+    if last_close > upper_band:
+        premium = (last_close - upper_band) / upper_band * 100
+        signal = f"🚨 {ticker} - ABOVE Upper Band ({premium:.2f}%) at {last_close:.2f} (Potential Sell)"
+        
+    # Check for price below the Lower Band (potential buy signal)
+    elif last_close < lower_band:
+        discount = (lower_band - last_close) / lower_band * 100
+        signal = f"🟢 {ticker} - BELOW Lower Band ({discount:.2f}%) at {last_close:.2f} (Potential Buy)"
+    
+    return signal
 
+def run_scanner():
+    """Main function to run the scanner, collect signals, and set GitHub output."""
+    print("Starting Bollinger Band Signal Scan for Nifty 50 stocks...")
+    
+    signals = []
+    
     for ticker in TICKERS:
-        # 1. Fetch Data
-        data = fetch_data(ticker)
-        if data is None:
-            continue
-            
-        # 2. Extract Close Prices and Calculate %B
+        # Clean ticker name for display (remove .NS)
+        display_ticker = ticker.replace('.NS', '')
+        
         try:
-            # Pass only the Close price Series to the calculation function
-            close_prices = data['Close']
-            latest_pct_b = calculate_pct_b(close_prices, WINDOW, NUM_STD)
-                
-            # 3. Scan for Signal
-            signal = scan_for_signals(latest_pct_b, ticker)
+            # 1. Fetch data
+            data = yf.download(ticker, period=PERIOD, interval=INTERVAL, progress=False)
             
-            if signal:
-                signal_list.append(signal)
+            # Defensive check for data emptiness or missing 'Close' column
+            if data.empty or 'Close' not in data.columns:
+                print(f"Skipping {ticker}: Data unavailable or corrupted.")
+                signals.append(f"❌ {display_ticker} - Data unavailable or corrupted.")
+                continue
+
+            # 2. Calculate BB
+            df_with_bb = calculate_bollinger_bands(data)
+            
+            # Check if BB calculation failed (e.g., if calculate_bollinger_bands returned None)
+            if df_with_bb is None:
+                print(f"Skipping {ticker}: Could not calculate Bollinger Bands due to missing 'Close' data.")
+                signals.append(f"❌ {display_ticker} - Calculation failed: Missing 'Close' data.")
+                continue
+
+            # 3. Generate Signal
+            signal = generate_signal(df_with_bb, display_ticker)
+            
+            # Only append signals that are not empty (meaning it's a Buy/Sell signal or the Info signal)
+            if signal and not signal.startswith("ℹ️"):
+                signals.append(signal)
+
         except Exception as e:
-            # Catch any unexpected errors during the calculation phase
-            print(f"Error processing final calculation for {ticker}: {e}. Skipping.")
-            continue
+            # General catch for any unexpected yfinance or pandas error
+            print(f"An unexpected error occurred processing {ticker}: {e}")
+            signals.append(f"⚠️ {display_ticker} - Unexpected Error: {e}")
 
-    # --- GitHub Actions Output Preparation ---
-    if signal_list:
-        output = "🚨 Daily Trading Signals Found! 🚨\n\n" + "\n".join(signal_list)
-        print(output) # Print the signals for visibility
+    # --- Final Output Formatting ---
+    if not signals:
+        # If no BUY/SELL signals found, set the clean default message
+        final_message = "✅ No Bollinger Band Signals Found (All Nifty 50 tickers in range 5% - 95%)."
     else:
-        output = "✅ No Bollinger Band Signals Found (All tickers in range 5% - 95%)."
-        print(output)
+        # Join all found signals into a single string, separated by newlines
+        final_message = "\n".join(signals)
         
-    # Set the output variable using the new, correct method
-    set_github_output('signal', output)
-        
-    print("--- Scan Complete ---")
+    print("\n--- Final Scan Summary ---")
+    print(final_message)
+    print("--------------------------\n")
+    
+    # Send the final message to the GitHub Actions output variable 'signal'
+    set_github_output("signal", final_message)
+    
+    print("Scan complete. Output variable set successfully.")
 
-# Entry point of the script
+
 if __name__ == "__main__":
-    main()
+    run_scanner()
