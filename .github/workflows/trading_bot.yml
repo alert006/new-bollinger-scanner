@@ -1,41 +1,49 @@
 name: Daily Bollinger Signal Bot
 
 on:
-  # Schedule the job to run every day at 15:30 UTC (9 PM IST)
-  # NOTE: UTC time is used for scheduling. 15:30 UTC = 9:00 PM IST
+  # Triggers the workflow at 9:15 AM IST (which is approximately 3:45 AM UTC) every weekday (Monday-Friday)
   schedule:
-    - cron: '30 15 * * *'
-  
-  # Allows you to manually run the workflow from the Actions tab
+    - cron: '15 3 * * 1-5'
+  # Allows manual running from the Actions tab
   workflow_dispatch:
 
 jobs:
   run-scanner:
     runs-on: ubuntu-latest
-
-    # Load the secure secrets (Telegram Token & Chat ID)
-    env:
-      TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-
     steps:
-      # Step 1: Checkout the repository code
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Step 2: Set up Python environment
-      - name: Set up Python
+      - name: Set up Python 3.10
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11' 
-
-      # Step 3: Install Python dependencies
+          python-version: '3.10'
+      
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-
-      # Step 4: Run the main Python script (Bot Execution)
-      # The script will now run in a non-Streamlit environment, so it will execute the bot logic.
+          # Line 1: Use requirements.txt in the root (this is already likely correct)
+          pip install -r requirements.txt 
+      
       - name: Run Trading Bot and Send Alerts
-        run: python app.py
+        id: scanner
+        run: |
+          # Line 2: ***CRITICAL CHANGE***
+          # We are changing this from 'python app.py' to 'python streamlit_trading_bot.py'
+          # to run the signal script instead of the Streamlit web app.
+          python streamlit_trading_bot.py
+          
+      - name: Send Telegram Notification (ONLY if trade_signal is not empty)
+        if: ${{ steps.scanner.outputs.signal != '' }}
+        uses: appleboy/telegram-action@master
+        with:
+          to: ${{ secrets.TELEGRAM_CHAT_ID }}
+          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          message: |
+            📢 TRADING BOT ALERT: Signal Found
+            ------------------------------------
+            Signal Details: ${{ steps.scanner.outputs.signal }}
+          disable_web_page_preview: true
+          
+      - name: Complete job
+        run: echo "Bot run complete."
