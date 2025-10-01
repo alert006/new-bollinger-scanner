@@ -27,7 +27,8 @@ def fetch_data(ticker):
     """Fetches historical data for a given ticker."""
     try:
         # Fetch up to 1 year of daily data
-        data = yf.download(ticker, period="1y", interval="1d", progress=False)
+        # auto_adjust=True simplifies things by only returning adjusted Close, Volume, etc.
+        data = yf.download(ticker, period="1y", interval="1d", progress=False, auto_adjust=True)
         return data
     except Exception as e:
         print(f"Error fetching data for {ticker}: {e}")
@@ -38,25 +39,29 @@ def calculate_bollinger_bands(data, window, num_std):
     Calculates Bollinger Bands (Middle, Upper, Lower) and %B.
     This function expects a DataFrame with a 'Close' column.
     """
-    if data is None or data.empty:
+    if data is None or data.empty or 'Close' not in data.columns:
         return None
 
+    # CRITICAL FIX: Extract the 'Close' series explicitly to prevent broadcasting errors.
+    close_prices = data['Close']
+
     # 1. Calculate Middle Band (20-day Simple Moving Average of the Close price)
-    data['Middle_Band'] = data['Close'].rolling(window=window).mean()
+    data['Middle_Band'] = close_prices.rolling(window=window).mean()
 
     # 2. Calculate Standard Deviation (20-day)
-    data['StdDev'] = data['Close'].rolling(window=window).std()
+    data['StdDev'] = close_prices.rolling(window=window).std()
 
     # 3. Calculate Upper and Lower Bands
+    # These calculations now operate on single-column Series (Middle_Band and StdDev)
     data['Upper_Band'] = data['Middle_Band'] + (data['StdDev'] * num_std)
     data['Lower_Band'] = data['Middle_Band'] - (data['StdDev'] * num_std)
 
     # 4. Calculate %B (Percent Bandwidth)
-    # This calculation is now correctly structured for element-wise operation (Series/Series).
     denominator = data['Upper_Band'] - data['Lower_Band']
+    numerator = close_prices - data['Lower_Band']
     
-    # Handle division by zero/NaNs that may occur at the start of the series (first 19 days)
-    data['Pct_B'] = np.where(denominator != 0, (data['Close'] - data['Lower_Band']) / denominator, 0.5)
+    # Use numpy.where to handle division by zero/NaNs that occur at the start of the series
+    data['Pct_B'] = np.where(denominator != 0, numerator / denominator, 0.5)
     
     return data
 
@@ -92,15 +97,20 @@ def main():
             continue
             
         # 2. Calculate Bands and %B
-        data_with_bands = calculate_bollinger_bands(data, WINDOW, NUM_STD)
-        if data_with_bands is None:
-            continue
+        # Added a try/except block here for resilience against bad data structures
+        try:
+            data_with_bands = calculate_bollinger_bands(data, WINDOW, NUM_STD)
+            if data_with_bands is None:
+                continue
+                
+            # 3. Scan for Signal
+            signal = scan_for_signals(data_with_bands, ticker)
             
-        # 3. Scan for Signal
-        signal = scan_for_signals(data_with_bands, ticker)
-        
-        if signal:
-            signal_list.append(signal)
+            if signal:
+                signal_list.append(signal)
+        except Exception as e:
+            print(f"Error processing Bollinger Bands for {ticker}: {e}")
+            continue
 
     # Output for GitHub Actions
     if signal_list:
@@ -109,6 +119,7 @@ def main():
     else:
         # Critical for Telegram step: output must be set, even if empty
         print("No Signals Found")
+        # Ensure the output variable is explicitly set, even if empty, for the next step.
         print(f"::set-output name=signal::No Signals Found")
         
     print("--- Scan Complete ---")
