@@ -1,50 +1,51 @@
-name: Daily Bollinger Signal Bot
+ame: Daily Bollinger Signal Bot
 
 on:
-  # Triggers the workflow at 9:15 AM IST (which is approximately 3:45 AM UTC) every weekday (Monday-Friday)
-  schedule:
-    - cron: '15 3 * * 1-5'
-  # Allows manual running from the Actions tab
-  workflow_dispatch:
+workflow_dispatch:
+schedule:
+# Runs at 12:00 UTC (4:00 PM IST) daily
+- cron: '0 12 * * *'
 
 jobs:
-  run-scanner:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+run-scanner:
+runs-on: ubuntu-latest
+steps:
+- name: Checkout code
+uses: actions/checkout@v4
 
-      - name: Set up Python 3.10
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
+  - name: Set up Python 3.10
+    uses: actions/setup-python@v4
+    with:
+      python-version: "3.10"
+
+  - name: Install dependencies (including Plotly fix)
+    run: |
+      python -m pip install --upgrade pip
+      # Line 1: Install requirements.txt
+      pip install -r requirements.txt
+      # Line 2: Ensure plotly is explicitly installed just in case it was missed
+      pip install plotly
+
+  - name: Run Trading Bot and Send Alerts
+    id: scanner
+    run: |
+      # CRITICAL FIX: Execute the correct script (app.py)
+      SIGNAL_OUTPUT=$(python app.py)
       
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          # Line 1: Use requirements.txt in the root (this is already likely correct)
-          pip install -r requirements.txt 
-      
-      - name: Run Trading Bot and Send Alerts
-        id: scanner
-        run: |
-          # 1. Execute the correct script (trading_bot.py) and capture its output into a variable.
-          SIGNAL=$(python trading_bot.py)
-          
-          # 2. This critical line saves the variable so the Telegram step can read it later.
-          echo "signal=$SIGNAL" >> $GITHUB_OUTPUT
-          
-      - name: Send Telegram Notification (ONLY if trade_signal is not empty)
-        if: ${{ steps.scanner.outputs.signal != '' }}
-        uses: appleboy/telegram-action@master
-        with:
-          to: ${{ secrets.TELEGRAM_CHAT_ID }}
-          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          message: |
-            📢 TRADING BOT ALERT: Signal Found
-            ------------------------------------
-            Signal Details: ${{ steps.scanner.outputs.signal }}
-          disable_web_page_preview: true
-          
-      - name: Complete job
-        run: echo "Bot run complete."
+      # Pass the output to the next steps
+      echo "signal=$SIGNAL_OUTPUT" >> $GITHUB_OUTPUT
+    
+  - name: Send Telegram Notification (ONLY if trade signal is not empty)
+    uses: appleboy/telegram-action@master
+    with:
+      to: ${{ secrets.TELEGRAM_CHAT_ID }}
+      token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      message: |
+        *NEW BOT ALERT: Signal Found*
+        
+        Signal Details: ${{ steps.scanner.outputs.signal }}
+      disable_web_page_preview: true
+    if: ${{ steps.scanner.outputs.signal != '' }}
+
+  - name: Complete job
+    run: echo "Bot run complete."
