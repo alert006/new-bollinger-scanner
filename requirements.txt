@@ -1,6 +1,5 @@
 streamlit>=1.36.0
 pandas>=2.2.0
-yfinance>=0.2.36 # CHANGED THIS LINE
+yfinance>=0.2.36
 requests>=2.31.0
 numpy>=1.26.0
-sleepy>=0.13.0
