@@ -27,65 +27,60 @@ def fetch_data(ticker):
     """Fetches historical data for a given ticker."""
     try:
         # Fetch up to 1 year of daily data. auto_adjust=True simplifies the structure.
-        data = yf.download(ticker, period="1y", interval="1d", progress=False, auto_adjust=True)
+        # Set timeout to prevent indefinitely hung calls on bad tickers.
+        data = yf.download(ticker, period="1y", interval="1d", progress=False, auto_adjust=True, timeout=10)
+        
+        # Check if data frame contains a 'Close' column and has enough rows
+        if data.empty or 'Close' not in data.columns or len(data) < WINDOW:
+            print(f"Warning: Not enough data or missing 'Close' column for {ticker}.")
+            return None
+        
         return data
     except Exception as e:
         # Catch network or request errors
         print(f"Error fetching data for {ticker}: {e}")
         return None
 
-def calculate_bollinger_bands(data, window, num_std):
+def calculate_pct_b(close_prices, window, num_std):
     """
-    Calculates Bollinger Bands (Middle, Upper, Lower) and %B using a robust
-    method that avoids common broadcasting issues.
+    Calculates the latest %B value from a single Pandas Series of closing prices.
+    This function is completely isolated to prevent DataFrame broadcasting errors.
     """
-    if data is None or data.empty or 'Close' not in data.columns:
-        print("Data is invalid or missing 'Close' column.")
-        return None
+    if close_prices is None or len(close_prices) < window:
+        return np.nan
 
-    # CRITICAL FIX: Isolate the Close prices as a separate Series for calculation.
-    close_prices = data['Close']
-
-    # Create a temporary DataFrame for all calculations using the Close prices index
-    bands = pd.DataFrame(index=close_prices.index)
-
-    # 1. Calculate Middle Band (20-day Simple Moving Average)
-    bands['Middle_Band'] = close_prices.rolling(window=window).mean()
+    # 1. Calculate Middle Band (SMA)
+    middle_band = close_prices.rolling(window=window).mean()
 
     # 2. Calculate Standard Deviation
-    bands['StdDev'] = close_prices.rolling(window=window).std()
+    std_dev = close_prices.rolling(window=window).std()
 
-    # 3. Calculate Upper and Lower Bands
-    bands['Upper_Band'] = bands['Middle_Band'] + (bands['StdDev'] * num_std)
-    bands['Lower_Band'] = bands['Middle_Band'] - (bands['StdDev'] * num_std)
+    # 3. Calculate Upper and Lower Bands (these are also series)
+    upper_band = middle_band + (std_dev * num_std)
+    lower_band = middle_band - (std_dev * num_std)
 
-    # 4. Calculate %B (Percent Bandwidth)
-    denominator = bands['Upper_Band'] - bands['Lower_Band']
-    numerator = close_prices - bands['Lower_Band']
+    # 4. Calculate %B (Percent Bandwidth) for the whole series
+    denominator = upper_band - lower_band
+    numerator = close_prices - lower_band
     
-    # Use numpy.where for safe division, handling cases where denominator is zero or NaN
-    bands['Pct_B'] = np.where(denominator != 0, numerator / denominator, 0.5)
-
-    # Merge the calculated bands back into the original data DataFrame
-    data = data.join(bands[['Middle_Band', 'Upper_Band', 'Lower_Band', 'Pct_B']])
+    # Calculate %B, handling division by zero/NaNs (occurs at start of series)
+    pct_b_series = np.where(denominator != 0, numerator / denominator, 0.5)
     
-    return data
+    # Return ONLY the latest calculated value as a float
+    return pct_b_series[-1]
 
-def scan_for_signals(data, ticker):
+def scan_for_signals(pct_b, ticker):
     """Checks the latest %B value for buy/sell signals."""
-    if data is None or data.empty or 'Pct_B' not in data.columns:
+    # Check for NaN (Not a Number) which happens if data was insufficient or calculation failed
+    if np.isnan(pct_b):
         return None
-
-    # Get the last valid Pct_B value
-    latest_pct_b = data['Pct_B'].iloc[-1]
-    
-    # Check for Oversold (Buy/Long Signal) or Overbought (Sell/Short Signal)
-    if latest_pct_b < 0.05 and not np.isnan(latest_pct_b):
-        # Stock is below the lower band, highly oversold (Buy Signal)
-        return f"{ticker}: Long/Buy Signal (%B = {latest_pct_b:.2f})"
-    elif latest_pct_b > 0.95 and not np.isnan(latest_pct_b):
-        # Stock is above the upper band, highly overbought (Short/Sell Signal)
-        return f"{ticker}: Short/Sell Signal (%B = {latest_pct_b:.2f})"
+        
+    # Check for Oversold (Buy/Long Signal: < 5%)
+    if pct_b < 0.05:
+        return f"{ticker}: Long/Buy Signal (%B = {pct_b:.2f}) - Oversold (Below Lower Band)"
+    # Check for Overbought (Sell/Short Signal: > 95%)
+    elif pct_b > 0.95:
+        return f"{ticker}: Short/Sell Signal (%B = {pct_b:.2f}) - Overbought (Above Upper Band)"
     else:
         return None
 
@@ -101,30 +96,33 @@ def main():
         if data is None:
             continue
             
-        # 2. Calculate Bands and %B
+        # 2. Extract Close Prices and Calculate %B
         try:
-            data_with_bands = calculate_bollinger_bands(data, WINDOW, NUM_STD)
-            if data_with_bands is None:
-                continue
+            # Pass only the Close price Series to the calculation function
+            close_prices = data['Close']
+            latest_pct_b = calculate_pct_b(close_prices, WINDOW, NUM_STD)
                 
             # 3. Scan for Signal
-            signal = scan_for_signals(data_with_bands, ticker)
+            signal = scan_for_signals(latest_pct_b, ticker)
             
             if signal:
                 signal_list.append(signal)
         except Exception as e:
-            # Catch any unexpected errors during calculation/scanning
-            print(f"Error processing Bollinger Bands for {ticker}: {e}")
+            # This try/except block should now only catch errors related to the single-series calculation
+            print(f"Error processing final calculation for {ticker}: {e}. Skipping.")
             continue
 
     # --- GitHub Actions Output ---
     if signal_list:
-        output = "Signals Found:\n" + "\n".join(signal_list)
+        output = "🚨 Daily Trading Signals Found! 🚨\n\n" + "\n".join(signal_list)
+        print(output) # Print the signals for visibility
+        # Set the output variable for the next step (Telegram)
         print(f"::set-output name=signal::{output}")
     else:
         # Ensure the output is set even when no signals are found
-        print("No Signals Found")
-        print(f"::set-output name=signal::No Signals Found")
+        no_signal_msg = "No Bollinger Band Signals Found (All tickers in range 5% - 95%)."
+        print(no_signal_msg)
+        print(f"::set-output name=signal::{no_signal_msg}")
         
     print("--- Scan Complete ---")
 
